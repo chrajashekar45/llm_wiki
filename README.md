@@ -142,7 +142,7 @@ streamlit run frontend/app.py
 
 ## Docker
 
-Docker is optional, but useful for demos and interviews because it shows how the app can be packaged.
+Docker , it shows how the app can be packaged.
 
 Build and run the app with Docker Compose:
 
@@ -173,7 +173,7 @@ For local non-Docker development, use your local or cloud Qdrant URL instead.
 
 ## Deployment Plan
 
-Cloud deployment is not required for the prototype, but the project can be explained as deployable in this shape:
+Cloud deployment , yet to be done:
 
 - Containerize the Streamlit app with the included `Dockerfile`.
 - Run Qdrant as a managed service, a separate container, or a persistent VM service.
@@ -181,8 +181,6 @@ Cloud deployment is not required for the prototype, but the project can be expla
 - Store generated wiki files in a mounted volume, object storage, or a git-backed repository.
 - Move long ingestion jobs into a background worker for large PDFs and rate-limit handling.
 - Keep API keys in cloud secrets or environment variables, never in source control.
-
-For an interview, this is enough to show production awareness without requiring a live cloud deployment.
 
 ## LLM Providers
 
@@ -220,18 +218,18 @@ This project currently keeps the workflow simple, but production usage should ad
 - No authentication or multi-user support.
 - `backend/main.py` is currently empty; the app is Streamlit-first.
 
-## Roadmap Ideas
+## Scope for further improvemnts
 
-- Add a "Lint Wiki" workflow.
-- Add OCR for scanned PDFs.
-- Add chunked summarization for large files.
-- Add a "Save this answer to wiki" button.
+- Adding a "Lint Wiki" workflow.
+- Adding OCR for scanned PDFs.
+- Adding chunked summarization for large files.
+- Adding a "Save this answer to wiki" button.
 - Improve entity/concept page linking.
-- Add source metadata and YAML frontmatter.
-- Add better search over markdown pages.
-- Add tests around wiki updates and duplicate page handling.
+- Adding source metadata and YAML frontmatter.
+- Adding better search over markdown pages.
+- Adding tests around wiki updates and duplicate page handling.
 
-## Development Notes
+## Git Commit Do’s and Don’ts 
 
 - Do not commit `.env`.
 - Do not commit `venv/`.
