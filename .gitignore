@@ -1,0 +1,25 @@
+# Environment and secrets
+.env
+.env.*
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local/generated data
+data/raw/
+data/wiki/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
