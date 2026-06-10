@@ -1,4 +1,4 @@
-from backend.services.llm_service import call_openrouter
+from backend.services.llm_service import call_groq,call_openrouter
 
 
 def extract_entities(text):
