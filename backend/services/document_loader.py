@@ -39,3 +39,12 @@ def extract_pdf_text(uploaded_file):
         raise ValueError("No extractable text found in this PDF.")
 
     return content
+
+
+
+
+
+
+
+
+
