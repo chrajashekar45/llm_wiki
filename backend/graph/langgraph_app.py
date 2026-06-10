@@ -52,8 +52,8 @@ def embed(state):
 
 # 3. Store in Qdrant
 def store(state):
-    upload_embeddings(state["chunks"], state["embeddings"])
-    return {}
+    stored = upload_embeddings(state["chunks"], state["embeddings"])
+    return {"maintenance": {"qdrant_stored": stored}}
 
 
 # 4. Summarization
