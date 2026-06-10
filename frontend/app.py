@@ -16,27 +16,28 @@ st.title("LLM Wiki Knowledge System")
 # ---------------- FILE UPLOAD ---------------- #
 st.sidebar.header("Upload Document")
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload a source file",
+uploaded_files = st.sidebar.file_uploader(
+    "Upload source files",
     type=list(SUPPORTED_EXTENSIONS),
+    accept_multiple_files=True,
 )
 
-if uploaded_file:
-    if st.sidebar.button("Ingest Document"):
+if uploaded_files:
+    if st.sidebar.button("Ingest Documents"):
         try:
-            content = extract_text_from_upload(uploaded_file)
+            results = []
+            for uploaded_file in uploaded_files:
+                content = extract_text_from_upload(uploaded_file)
 
-            with st.spinner("Processing..."):
-                result = ingest_graph.invoke({"input": content})
+                with st.spinner(f"Processing {uploaded_file.name}..."):
+                    result = ingest_graph.invoke({"input": content})
+                results.append((uploaded_file.name, result))
 
-            st.sidebar.success("Document added to knowledge base!")
-            st.sidebar.write(f"Created: `{result.get('title', 'wiki page')}`")
-
-            touched_pages = (result.get("maintenance") or {}).get("touched_pages") or []
-            if touched_pages:
-                st.sidebar.write("Updated:")
-                for page in touched_pages:
-                    st.sidebar.write(f"- `{page}`")
+            st.sidebar.success(f"Processed {len(results)} document(s)!")
+            for filename, result in results:
+                qdrant_stored = (result.get("maintenance") or {}).get("qdrant_stored", True)
+                status_text = "stored in vector store" if qdrant_stored else "processed without vector store"
+                st.sidebar.write(f"- {filename}: {result.get('title', 'wiki page')} ({status_text})")
         except Exception as exc:
             st.sidebar.error(str(exc))
 
