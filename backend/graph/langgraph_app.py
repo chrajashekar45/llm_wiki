@@ -4,7 +4,8 @@ import json
 import re
 
 # Services
-from backend.services.llm_service import call_groq
+from backend.services.llm_service import call_openrouter 
+#from backend.services.llm_service import call_groq
 from backend.services.embedding import get_embeddings
 from backend.services.qdrant_service import upload_embeddings, search
 from backend.services.wiki_manager import (
@@ -65,7 +66,7 @@ Focus on reusable claims, facts, definitions, entities, concepts, and notable un
 Source:
 {state['input']}
 """
-    summary = call_groq(prompt)
+    summary = call_openrouter(prompt)
     return {"summary": summary}
 
 
@@ -85,7 +86,7 @@ Return only the title, no punctuation wrapper.
 Source:
 {state['input'][:4000]}
 """
-    title = unique_slug(call_groq(title_prompt))
+    title = unique_slug(call_openrouter(title_prompt))
 
     content = f"# {title}\n\n"
     content += "## Type\nSource summary\n\n"
@@ -155,7 +156,7 @@ Entities:
 Existing wiki overview:
 {wiki_overview}
 """
-    maintenance = parse_json_object(call_groq(prompt))
+    maintenance = parse_json_object(call_openrouter(prompt))
 
     if not isinstance(maintenance.get("pages"), list):
         maintenance["pages"] = []
@@ -263,7 +264,7 @@ Question:
 
 Answer:
 """
-    answer = call_groq(prompt)
+    answer = call_openrouter(prompt)
     return {"answer": answer}
 
 
