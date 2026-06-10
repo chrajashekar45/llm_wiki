@@ -1,4 +1,4 @@
-from backend.services.llm_service import call_groq
+from backend.services.llm_service import call_openrouter
 
 
 def extract_entities(text):
@@ -10,7 +10,7 @@ Text:
 {text}
 """
 
-    response = call_groq(prompt)
+    response = call_openrouter(prompt)
 
     entities = [e.strip() for e in response.split(",") if e.strip()]
 
