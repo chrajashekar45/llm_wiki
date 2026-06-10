@@ -17,7 +17,7 @@ groq_client = OpenAI(
 )
 
 
-def call_openrouter(prompt, model="mistralai/mixtral-8x7b-instruct"):
+def call_openrouter(prompt, model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"):
     response = openrouter_client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
