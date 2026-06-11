@@ -372,7 +372,8 @@ services:
     restart: unless-stopped
 ```
 
-**Common Issue**: Old compose files may reference a local Qdrant container. Remove that service and use cloud Qdrant via `.env` instead.
+**Common Issue**: (The Issue i faced for the Mistake i made . you can skip it as thst mistake is not there in this)
+Old compose files may reference a local Qdrant container. Remove that service and use cloud Qdrant via `.env` instead.
 
 Update locally and push if needed:
 
