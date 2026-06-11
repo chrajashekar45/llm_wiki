@@ -583,7 +583,7 @@ Currently configured clients:
 The default generation path uses Groq:
 
 ```python
-call_groq(prompt, model="llama-3.3-70b-versatile")
+call_openrouter(prompt, model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
 ```
 
 ## Token Limit Note
