@@ -6,7 +6,7 @@ Build compounding knowledge as persistent, human-readable markdown files—not t
 
 ---
 
-## 🎯 Vision
+##  Vision
 
 Most AI chatbots answer from general training data. **LLM Wiki is different:**
 
@@ -19,7 +19,7 @@ The system learns from your documents and gets smarter, while staying grounded i
 
 ---
 
-## 📋 Table of Contents
+##  Table of Contents
 
 - [Quick Start](#quick-start)
 - [How It Works](#how-it-works)
@@ -40,7 +40,7 @@ The system learns from your documents and gets smarter, while staying grounded i
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Local Development (3 minutes)
 
@@ -151,7 +151,7 @@ Results grouped by wiki page or upload file
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ### System Diagram
 
@@ -304,7 +304,7 @@ Open **http://localhost:8501**
 
 ---
 
-## 🐳 Docker Deployment
+##  Docker Deployment
 
 ### Quick Start
 
@@ -346,7 +346,7 @@ services:
 
 ---
 
-## 📁 Supported File Types
+##  Supported File Types
 
 | Format | Status | Notes |
 |--------|--------|-------|
@@ -359,7 +359,7 @@ To add more formats, extend `backend/services/document_loader.py`.
 
 ---
 
-## 🤖 LLM & Embedding Providers
+##  LLM & Embedding Providers
 
 ### LLM Provider: Groq
 
@@ -445,7 +445,7 @@ Removed page: old_notes
 
 ---
 
-## 🔬 Technical Deep Dive
+##  Technical Deep Dive
 
 ### Project Structure
 
@@ -548,7 +548,7 @@ See `AGENTS.md` for LLM-facing conventions:
 
 ---
 
-## 🛑 Limitations & Roadmap
+##  Limitations & Roadmap
 
 ### Current Limitations
 
@@ -571,7 +571,7 @@ See `AGENTS.md` for LLM-facing conventions:
 
 ---
 
-## 🚀 Deployment Checklist
+##  Deployment Checklist
 
 Before deploying to production, ensure:
 
@@ -615,7 +615,7 @@ python scripts/smoke_test.py
 
 ---
 
-## 📊 Architecture Rationale
+##  Architecture & Design Decisions
 
 ### Why LangGraph?
 
@@ -657,37 +657,9 @@ python scripts/smoke_test.py
 
 ---
 
-## 🤝 Contributing
 
-Found a bug or want to suggest a feature? Open an issue or pull request!
 
-The system is designed to be extended:
-- Add new document loaders in `backend/services/document_loader.py`
-- Add new retrieval strategies in `backend/graph/retrieval.py`
-- Add new LLM-facing logic in `AGENTS.md`
 
----
-
-## 📄 License
-
-This project is open source. See LICENSE file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- **LangGraph** — workflow orchestration
-- **Groq** — fast LLM inference
-- **OpenRouter** — embedding API
-- **Qdrant** — vector database
-- **Whoosh** — BM25 search
-- **Streamlit** — web UI framework
-
----
-
-## 📞 Support
-
-- **Questions?** Open a GitHub issue
 - **Bugs?** Include your OS, Python version, and `.env` setup (no API keys!)
 - **Feature requests?** Describe your use case
 
