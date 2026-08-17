@@ -73,7 +73,7 @@ Open **http://localhost:8501**
 
 ---
 
-## 🔄 How It Works
+##  How It Works
 
 ### Upload Workflow
 
@@ -194,7 +194,7 @@ Results grouped by wiki page or upload file
 
 ---
 
-## ⚡ Performance
+##  Performance
 
 ### Key Optimizations
 
@@ -226,7 +226,7 @@ For **production with multiple users**, do not rely on full filesystem scans. Us
 
 ---
 
-## 🔧 Setup
+##  Setup
 
 ### Prerequisites
 
@@ -287,7 +287,7 @@ Open **http://localhost:8501**
 
 ---
 
-## 📋 Environment Variables
+##  Environment Variables
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
@@ -390,7 +390,7 @@ To add more formats, extend `backend/services/document_loader.py`.
 
 ---
 
-## 🎯 Managing Your Wiki
+##  Managing Your Wiki
 
 ### Upload Documents
 
@@ -590,30 +590,7 @@ Before deploying to production, ensure:
 
 ---
 
-## 🧪 Testing & Validation
 
-### Smoke Test
-
-Verify your setup works end-to-end:
-
-```powershell
-python scripts/smoke_test.py
-```
-
-**Expected:**
-- Ingest completes in ~15–30 seconds
-- First query returns in ~3–5 seconds
-- Repeated query is faster (embedding cache hit)
-
-### Manual Testing
-
-1. **Upload a test document** — a short `.txt` file or PDF
-2. **Check the wiki** — open `data/wiki/index.md` and `log.md`
-3. **Ask a simple question** — ask about content in your test file
-4. **Verify sources** — sources should show the wiki page you uploaded
-5. **Delete a page** — verify it's removed from disk and index
-
----
 
 ##  Architecture & Design Decisions
 
@@ -648,7 +625,7 @@ python scripts/smoke_test.py
 
 ---
 
-## 📝 Example Use Cases
+##  Example Use Cases
 
 1. **Research Project** — upload papers, articles, notes → system creates concept map, tracks contradictions
 2. **Personal Learning** — upload course notes, textbooks → system creates entity index, enables fast recall
@@ -659,10 +636,3 @@ python scripts/smoke_test.py
 
 
 
-
-- **Bugs?** Include your OS, Python version, and `.env` setup (no API keys!)
-- **Feature requests?** Describe your use case
-
----
-
-**Happy wiki-building! 🚀**
