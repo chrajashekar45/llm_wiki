@@ -1,33 +1,31 @@
 import os
-from openai import OpenAI
+
 from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv()
 
-# OpenRouter client
-openrouter_client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-)
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-# Groq client (OpenAI-compatible)
 groq_client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY"),
+    timeout=120.0,
 )
 
 
-def call_openrouter(prompt, model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"):
-    response = openrouter_client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content
-
-
-def call_groq(prompt, model="llama-3.3-70b-versatile"):
+def call_groq(prompt, model=None):
+    model = model or GROQ_MODEL
     response = groq_client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.choices[0].message.content
+
+    if not response or not response.choices:
+        raise RuntimeError("Groq returned no choices.")
+
+    content = getattr(response.choices[0].message, "content", None)
+    if not content:
+        raise RuntimeError("Groq returned no content.")
+
+    return content.strip()

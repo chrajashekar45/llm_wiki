@@ -1,29 +1,40 @@
-from langgraph.graph import END, StateGraph
-from typing import TypedDict
+"""LangGraph workflows for document ingest and question answering."""
+
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
+from typing import TypedDict
 
-# Services
-from backend.services.llm_service import call_openrouter 
-#from backend.services.llm_service import call_groq
-from backend.services.embedding import get_embeddings
-from backend.services.qdrant_service import upload_embeddings, search
-from backend.services.wiki_manager import (
-    save_page,
-    update_index,
-    log_event,
-    search_wiki,
-    unique_slug,
-    upsert_maintained_page,
-    get_wiki_overview,
+from langgraph.graph import END, StateGraph
+
+from backend.graph.retrieval import (
+    VECTOR_TOP_K,
+    WIKI_TOP_K,
+    merge_retrieval,
 )
+from backend.services.embedding import get_embeddings
 from backend.services.entity_extractor import extract_entities
+from backend.services.llm_service import call_groq
+from backend.services.qdrant_service import search_hits, upload_embeddings
+from backend.services.wiki_manager import (
+    get_wiki_overview,
+    log_event,
+    save_page,
+    search_wiki,
+    search_wiki_hits,
+    unique_slug,
+    update_index,
+    upsert_maintained_page,
+)
 
+CHUNK_SIZE = 500
+SOURCE_PREVIEW_CHARS = 4000
+RELATED_WIKI_CHARS = 3000
 
-# ---------------- STATE ---------------- #
 
 class GraphState(TypedDict):
     input: str
+    source_file: str
     chunks: list
     embeddings: list
     retrieved: list
@@ -34,74 +45,72 @@ class GraphState(TypedDict):
     answer: str
     title: str
     maintenance: dict
+    hybrid_results: list
 
 
-# ---------------- NODES ---------------- #
+# --- Ingest nodes ---
 
-# 1. Chunking
+
 def chunk_text(state):
     text = state["input"]
-    chunks = [text[i:i+500] for i in range(0, len(text), 500)]
-    return {"chunks": chunks}
+    return {"chunks": [text[i : i + CHUNK_SIZE] for i in range(0, len(text), CHUNK_SIZE)]}
 
 
-# 2. Embedding
 def embed(state):
-    embeddings = get_embeddings(state["chunks"])
-    return {"embeddings": embeddings}
+    return {"embeddings": get_embeddings(state["chunks"])}
 
 
-# 3. Store in Qdrant
-def store(state):
-    stored = upload_embeddings(state["chunks"], state["embeddings"])
-    return {"maintenance": {"qdrant_stored": stored}}
+def store_vectors(state):
+    wiki_page = state.get("title") or ""
+    source_file = state.get("source_file") or ""
+    metadatas = [
+        {
+            "wiki_page": wiki_page,
+            "source_file": source_file,
+            "chunk_index": index,
+        }
+        for index in range(len(state["chunks"]))
+    ]
+    stored = upload_embeddings(state["chunks"], state["embeddings"], metadatas)
+    maintenance = state.get("maintenance") or {}
+    maintenance["qdrant_stored"] = stored
+    return {"maintenance": maintenance}
 
 
-# 4. Summarization
 def summarize(state):
-    prompt = f"""
-Summarize this source for a persistent personal knowledge wiki.
-Focus on reusable claims, facts, definitions, entities, concepts, and notable uncertainty.
-
-Source:
-{state['input']}
-"""
-    summary = call_openrouter(prompt)
-    return {"summary": summary}
+    prompt = (
+        "Summarize this source for a persistent personal knowledge wiki.\n"
+        "Focus on reusable claims, facts, definitions, entities, concepts, and uncertainty.\n\n"
+        f"Source:\n{state['input']}"
+    )
+    return {"summary": call_groq(prompt)}
 
 
-# 5. Entity extraction
 def extract_entities_node(state):
-    entities = extract_entities(state["input"])
-    return {"entities": entities}
+    return {"entities": extract_entities(state["input"])}
 
 
-# 6. Create Wiki Page
 def create_wiki(state):
-    existing_context = "\n\n".join(search_wiki(state["input"], limit=5))
-    title_prompt = f"""
-Create a short, descriptive wiki page title for this source.
-Return only the title, no punctuation wrapper.
+    related = "\n\n".join(search_wiki(state["input"], limit=WIKI_TOP_K))
+    title_prompt = (
+        "Create a short, descriptive wiki page title for this source.\n"
+        "Return only the title, no punctuation wrapper.\n\n"
+        f"Source:\n{state['input'][:SOURCE_PREVIEW_CHARS]}"
+    )
+    title = unique_slug(call_groq(title_prompt))
 
-Source:
-{state['input'][:4000]}
-"""
-    title = unique_slug(call_openrouter(title_prompt))
-
-    content = f"# {title}\n\n"
-    content += "## Type\nSource summary\n\n"
-    content += f"## Summary\n{state['summary']}\n\n"
-    content += f"## Entities\n{', '.join(state['entities'])}\n\n"
-
-    if existing_context:
-        content += "## Related Existing Wiki Context\n"
-        content += existing_context[:3000]
-        content += "\n"
+    content = (
+        f"# {title}\n\n"
+        "## Type\nSource summary\n\n"
+        f"## Summary\n{state['summary']}\n\n"
+        f"## Entities\n{', '.join(state['entities'])}\n\n"
+    )
+    if related:
+        content += f"## Related Existing Wiki Context\n{related[:RELATED_WIKI_CHARS]}\n"
 
     save_page(title, content, overwrite=True)
     update_index(title, state["summary"])
     log_event("INGEST", f"Created page: {title}")
-
     return {"title": title}
 
 
@@ -112,7 +121,6 @@ def parse_json_object(text):
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             return {}
-
         try:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
@@ -120,11 +128,12 @@ def parse_json_object(text):
 
 
 def plan_maintenance(state):
-    wiki_overview = get_wiki_overview()
     prompt = f"""
 You maintain a persistent markdown knowledge wiki.
 
-Given the new source summary, entities, and existing wiki overview, decide which wiki pages should be created or updated.
+Given the new source summary, entities, and existing wiki overview,
+decide which wiki pages should be created or updated.
+
 Return strict JSON with this shape:
 {{
   "pages": [
@@ -135,18 +144,17 @@ Return strict JSON with this shape:
       "content": "complete markdown page content"
     }}
   ],
-  "contradictions": ["brief contradiction or tension notes"],
-  "open_questions": ["brief questions worth investigating"]
+  "contradictions": [],
+  "open_questions": []
 }}
 
 Rules:
-- Create or update pages for important entities, concepts, comparisons, and syntheses.
-- Include links to the new source page as [{state['title']}](./{state['title']}.md) where relevant.
-- Preserve uncertainty and contradictions instead of smoothing them away.
-- Keep each page concise but useful.
+- Create or update pages for important entities and concepts.
+- Keep each page concise.
 - Return only JSON.
 
 New source page: {state['title']}
+
 New source summary:
 {state['summary']}
 
@@ -154,17 +162,12 @@ Entities:
 {', '.join(state['entities'])}
 
 Existing wiki overview:
-{wiki_overview}
+{get_wiki_overview()}
 """
-    maintenance = parse_json_object(call_openrouter(prompt))
-
-    if not isinstance(maintenance.get("pages"), list):
-        maintenance["pages"] = []
-    if not isinstance(maintenance.get("contradictions"), list):
-        maintenance["contradictions"] = []
-    if not isinstance(maintenance.get("open_questions"), list):
-        maintenance["open_questions"] = []
-
+    maintenance = parse_json_object(call_groq(prompt))
+    for key in ("pages", "contradictions", "open_questions"):
+        if not isinstance(maintenance.get(key), list):
+            maintenance[key] = []
     return {"maintenance": maintenance}
 
 
@@ -175,31 +178,34 @@ def apply_maintenance(state):
     for page in maintenance.get("pages", []):
         title = page.get("title")
         content = page.get("content")
-        summary = page.get("summary") or "Maintained wiki page."
-        category = page.get("category") or "concepts"
-
         if not title or not content:
             continue
-
-        touched_pages.append(upsert_maintained_page(title, content, summary, category))
+        touched_pages.append(
+            upsert_maintained_page(
+                title,
+                content,
+                page.get("summary") or "Maintained wiki page.",
+                page.get("category") or "concepts",
+            )
+        )
 
     if maintenance.get("contradictions"):
-        content = "\n".join(f"- {item}" for item in maintenance["contradictions"])
+        body = "\n".join(f"- {item}" for item in maintenance["contradictions"])
         touched_pages.append(
             upsert_maintained_page(
                 "contradictions",
-                f"# contradictions\n\n## Current Tensions\n{content}\n",
+                f"# contradictions\n\n## Current Tensions\n{body}\n",
                 "Contradictions and tensions found across sources.",
                 "syntheses",
             )
         )
 
     if maintenance.get("open_questions"):
-        content = "\n".join(f"- {item}" for item in maintenance["open_questions"])
+        body = "\n".join(f"- {item}" for item in maintenance["open_questions"])
         touched_pages.append(
             upsert_maintained_page(
                 "open_questions",
-                f"# open_questions\n\n## Questions To Investigate\n{content}\n",
+                f"# open_questions\n\n## Questions To Investigate\n{body}\n",
                 "Open questions and research gaps.",
                 "syntheses",
             )
@@ -211,118 +217,98 @@ def apply_maintenance(state):
     return {"maintenance": {**maintenance, "touched_pages": touched_pages}}
 
 
-# 7. Retrieve from Qdrant
-def retrieve(state):
-    if state.get("wiki_results"):
-        return {"retrieved": []}
-
-    query_embedding = get_embeddings([state["input"]])[0]
-    results = search(query_embedding)
-    return {"retrieved": results}
+# --- Query nodes ---
 
 
-# 8. Retrieve from Wiki
-def retrieve_wiki(state):
-    wiki_results = search_wiki(state["input"])
-    return {"wiki_results": wiki_results}
+def _vector_search(question):
+    query_vector = get_embeddings([question])[0]
+    return search_hits(query_vector, limit=VECTOR_TOP_K)
 
 
-# 9. Merge Context
+def retrieve_all(state):
+    """Run wiki keyword search and vector search in parallel."""
+    question = state["input"]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        wiki_future = executor.submit(search_wiki_hits, question, WIKI_TOP_K)
+        vector_future = executor.submit(_vector_search, question)
+        wiki_results = wiki_future.result()
+        retrieved = vector_future.result()
+
+    return {"wiki_results": wiki_results, "retrieved": retrieved}
+
+
 def merge_context(state):
-    context_parts = []
-
-    if state.get("wiki_results"):
-        context_parts.append("Relevant Wiki Content:")
-        context_parts.extend(state["wiki_results"])
-
-    if state.get("retrieved"):
-        context_parts.append("Relevant Retrieved Chunks:")
-        context_parts.extend(state["retrieved"])
-
-    context = "\n\n".join(context_parts)
-
-    return {"context": context}
+    fused, context = merge_retrieval(
+        state.get("wiki_results") or [],
+        state.get("retrieved") or [],
+    )
+    return {"hybrid_results": fused, "context": context}
 
 
-# 10. Generate Answer
 def generate_answer(state):
     prompt = f"""
-You are a strict question-answering system.
+You are a strict retrieval-augmented question-answering system.
+Answer ONLY using the evidence below.
 
-Answer ONLY from the provided context.
-If the answer is present in the context, extract it clearly.
-Include the source page names when they are available.
-DO NOT use outside knowledge.
-DO NOT guess.
-If the context does not contain the answer, say: "I don't have enough information in the wiki to answer that."
+Rules:
+1. Do not use outside knowledge.
+2. Do not guess or invent facts.
+3. Write a clear, standalone answer in plain prose.
+4. Do NOT include citations, source names, evidence numbers, or footnotes in the answer.
+5. Do NOT repeat or quote long passages from the evidence.
+6. If evidence is insufficient, say: "I don't have enough information in the wiki to answer that."
 
-Context:
-{state['context']}
+Retrieved Evidence:
+--------------------------------------------------
+{state["context"]}
+--------------------------------------------------
 
 Question:
-{state['input']}
+{state["input"]}
 
 Answer:
 """
-    answer = call_openrouter(prompt)
-    return {"answer": answer}
+    return {"answer": call_groq(prompt)}
 
 
-# 11. (Optional) Store insight back to wiki
-def store_insight(state):
-    title = "insight_" + state["input"][:20].replace(" ", "_")
-
-    content = f"# Insight\n\n{state['answer']}"
-
-    save_page(title, content)
-    log_event("QUERY_INSIGHT", f"Stored insight: {title}")
-
-    return {}
+# --- Graph wiring ---
 
 
-# ---------------- INGEST GRAPH ---------------- #
+def _build_ingest_graph():
+    graph = StateGraph(GraphState)
+    graph.add_node("chunk", chunk_text)
+    graph.add_node("embed", embed)
+    graph.add_node("summarize", summarize)
+    graph.add_node("entities", extract_entities_node)
+    graph.add_node("wiki", create_wiki)
+    graph.add_node("store_vectors", store_vectors)
+    graph.add_node("plan_maintenance", plan_maintenance)
+    graph.add_node("apply_maintenance", apply_maintenance)
 
-ingest_builder = StateGraph(GraphState)
-
-ingest_builder.add_node("chunk", chunk_text)
-ingest_builder.add_node("embed", embed)
-ingest_builder.add_node("store", store)
-ingest_builder.add_node("summarize", summarize)
-ingest_builder.add_node("entities", extract_entities_node)
-ingest_builder.add_node("wiki", create_wiki)
-ingest_builder.add_node("plan_maintenance", plan_maintenance)
-ingest_builder.add_node("apply_maintenance", apply_maintenance)
-
-ingest_builder.set_entry_point("chunk")
-ingest_builder.add_edge("chunk", "embed")
-ingest_builder.add_edge("embed", "store")
-ingest_builder.add_edge("store", "summarize")
-ingest_builder.add_edge("summarize", "entities")
-ingest_builder.add_edge("entities", "wiki")
-ingest_builder.add_edge("wiki", "plan_maintenance")
-ingest_builder.add_edge("plan_maintenance", "apply_maintenance")
-ingest_builder.add_edge("apply_maintenance", END)
-
-ingest_graph = ingest_builder.compile()
+    graph.set_entry_point("chunk")
+    graph.add_edge("chunk", "embed")
+    graph.add_edge("embed", "summarize")
+    graph.add_edge("summarize", "entities")
+    graph.add_edge("entities", "wiki")
+    graph.add_edge("wiki", "store_vectors")
+    graph.add_edge("store_vectors", "plan_maintenance")
+    graph.add_edge("plan_maintenance", "apply_maintenance")
+    graph.add_edge("apply_maintenance", END)
+    return graph.compile()
 
 
-# ---------------- QUERY GRAPH ---------------- #
+def _build_query_graph():
+    graph = StateGraph(GraphState)
+    graph.add_node("retrieve_all", retrieve_all)
+    graph.add_node("merge", merge_context)
+    graph.add_node("generate", generate_answer)
 
-query_builder = StateGraph(GraphState)
+    graph.set_entry_point("retrieve_all")
+    graph.add_edge("retrieve_all", "merge")
+    graph.add_edge("merge", "generate")
+    graph.add_edge("generate", END)
+    return graph.compile()
 
-query_builder.add_node("retrieve", retrieve)
-query_builder.add_node("retrieve_wiki", retrieve_wiki)
-query_builder.add_node("merge", merge_context)
-query_builder.add_node("generate", generate_answer)
 
-query_builder.set_entry_point("retrieve_wiki")
-query_builder.add_edge("retrieve_wiki", "retrieve")
-query_builder.add_edge("retrieve", "merge")
-query_builder.add_edge("merge", "generate")
-query_builder.add_edge("generate", END)
-
-query_graph = query_builder.compile()
-
-# Backward-compatible alias for older scripts. Use ingest_graph or query_graph
-# directly in new code so uploads and questions stay separate.
-graph = query_graph
+ingest_graph = _build_ingest_graph()
+query_graph = _build_query_graph()

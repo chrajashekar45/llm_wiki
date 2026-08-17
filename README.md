@@ -1,125 +1,246 @@
 # LLM Wiki Knowledge System
 
-An experimental personal knowledge-base system where an LLM maintains a persistent markdown wiki from uploaded source files.
+A personal knowledge-base app that turns uploaded documents into a **living markdown wiki** and lets you **ask questions** against everything it has learned.
 
-Instead of only doing traditional RAG over raw documents, this project tries to build a compounding wiki layer. Uploaded files are summarized, indexed, stored as source pages, and used to update related wiki pages.
+Think of it like a research assistant who:
 
-## What This Project Does
+1. Reads documents you upload
+2. Writes organized notes in a folder you control
+3. Keeps those notes updated over time
+4. Answers questions using only those notes
 
-- Upload source files through a Streamlit UI.
-- Extract text from `.txt`, `.md`, and `.pdf` files.
-- Store document chunks as embeddings in Qdrant.
-- Use an LLM to summarize uploaded sources.
-- Extract entities and concepts.
-- Create markdown wiki pages in `data/wiki/`.
-- Maintain `index.md` and `log.md`.
-- Search the accumulated wiki when answering questions.
-- Keep ingestion and querying as separate workflows.
+---
+
+## Table of Contents
+
+- [The Big Idea (Non-Technical)](#the-big-idea-non-technical)
+- [How It Works in Practice](#how-it-works-in-practice)
+- [Architecture](#architecture)
+- [Performance Optimizations](#performance-optimizations)
+- [Project Structure](#project-structure)
+- [Technical Deep Dive](#technical-deep-dive)
+- [Setup (Local Development)](#setup-local-development)
+- [Run with Docker](#run-with-docker)
+- [Environment Variables](#environment-variables)
+- [Supported File Types](#supported-file-types)
+- [LLM Providers](#llm-providers)
+- [Managing Uploads and Wiki Pages](#managing-uploads-and-wiki-pages)
+- [Current Limitations](#current-limitations)
+- [Deployment Checklist](#deployment-checklist)
+- [Smoke Test](#smoke-test)
+
+---
+
+## The Big Idea (Non-Technical)
+
+Most chatbots answer from general training data. This project is different.
+
+**When you upload a file**, the system summarizes it, extracts important topics, creates wiki pages as plain markdown files, and updates related concept pages.
+
+**When you ask a question**, the system searches your wiki and its vector memory, combines the best evidence, and asks an LLM to answer using only that evidence.
+
+If the wiki does not contain enough information, it should say so instead of guessing.
+
+Your knowledge lives in `data/wiki/` as readable `.md` files.
+
+---
+
+## How It Works in Practice
+
+### 1. Upload a document
+
+1. Open the Streamlit app sidebar
+2. Choose files — they are added to an **upload queue** (not ingested immediately)
+3. Review the queue and click **Remove** on any accidental upload
+4. Click **Ingest Documents** when ready
+
+The ingest pipeline:
+
+```text
+chunk → embed → summarize → entities → wiki → store_vectors → plan_maintenance → apply_maintenance
+```
+
+### 2. Ask a question
+
+1. Type a question in the main area
+2. Click **Get Answer**
+
+The query pipeline:
+
+```text
+retrieve_all (parallel) → merge → generate
+```
+
+Answers typically return in a few seconds (see [Performance Optimizations](#performance-optimizations)).
+
+### 3. Delete a wiki page
+
+Use **Manage Wiki Pages** in the sidebar to select and delete a page. This removes the markdown file, its index entry, and linked Qdrant vectors.
+
+### 4. Sources in answers
+
+- **Answer** — clean prose at the top
+- **Sources** — grouped by **wiki page title** (with `data/wiki/page.md` path) or **upload filename** for vector chunks
+- Expand **snippet** under each source to see the passage used internally by retrieval
+
+---
+
+## Architecture
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                    Streamlit UI                         │
+│     upload queue · ingest · delete pages · Q&A          │
+└─────────────────────────┬───────────────────────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          ▼                               ▼
+   ┌──────────────┐               ┌──────────────┐
+   │ Ingest Graph │               │  Query Graph │
+   │  (LangGraph) │               │  (LangGraph) │
+   └──────┬───────┘               └──────┬───────┘
+          │                               │
+          ▼                               ▼
+ ┌────────────────┐              ┌────────────────┐
+ │ Markdown Wiki  │◄────────────►│ Vector Store   │
+ │  data/wiki/    │   hybrid     │    Qdrant      │
+ └────────────────┘  retrieval   └────────────────┘
+```
+
+| Layer | Location | Role |
+|-------|----------|------|
+| **Markdown wiki** | `data/wiki/*.md` | Main persistent knowledge (human-readable) |
+| **Vector store** | Qdrant `wiki_vectors` | Semantic search over document chunks |
+| **BM25 search index** | `data/wiki/.search_index/` | Fast keyword ranking over wiki passages (Whoosh) |
+| **Upload queue** | Streamlit session | Lets you review/remove files before ingest |
+
+Wiki conventions: [`AGENTS.md`](AGENTS.md)
+
+---
+
+## Performance Optimizations
+
+These changes keep Q&A responsive in production:
+
+| Optimization | What it does | Impact |
+|--------------|--------------|--------|
+| **Groq for all LLM calls** | Ingest + Q&A use `llama-3.3-70b-versatile` | Q&A dropped from 60s+ to ~4s |
+| **Parallel retrieval** | Wiki search and vector search run at the same time | Cuts retrieval latency roughly in half |
+| **Embedding cache** | Repeated questions skip the embedding API call | Warm queries ~1s vs ~4s cold |
+| **Wiki page cache** | Markdown pages loaded once, refreshed on edits | Faster keyword search as wiki grows |
+| **BM25 wiki index** | Whoosh index rebuilt when pages change | Reliable keyword ranking; avoids scanning every page on each query |
+| **Page-level sources** | UI groups passages by wiki page or upload file | Cleaner citations with `.md` paths |
+| **Vector metadata** | Qdrant stores `wiki_page`, `source_file`, `chunk_index` | Upload chunks link back to wiki pages and filenames |
+| **Upload queue** | Files are not ingested until you confirm | Prevents accidental processing |
+
+### Scaling note: wiki search
+
+Earlier versions scanned all wiki files on every question via `read_all_pages()` + keyword overlap. That approach gets **slow as the wiki grows** (many pages, many passages).
+
+This project now uses a **BM25 index (Whoosh)** stored under `data/wiki/.search_index/`. The index rebuilds automatically when wiki pages are added, updated, or deleted.
+
+| Wiki size | Recommended approach |
+|-----------|---------------------|
+| Small (under ~50 pages) | BM25 index (built-in) + in-memory page cache |
+| Medium / many pages | Keep BM25; monitor index rebuild time on ingest |
+| Multi-user production | BM25 + Qdrant hybrid RRF; consider Elasticsearch/OpenSearch for very large wikis |
+
+For **multiple users in production**, do not rely on full filesystem scans per query — use the BM25 index (or an external search service) plus the existing Qdrant vector index.
+
+---
 
 ## Project Structure
 
 ```text
 llm_wiki/
-|-- AGENTS.md
-|-- Dockerfile
-|-- README.md
-|-- docker-compose.yml
-|-- requirements.txt
-|-- setup_qdrant.py
-|-- test.py
-|-- backend/
-|   |-- main.py
-|   |-- graph/
-|   |   `-- langgraph_app.py
-|   `-- services/
-|       |-- document_loader.py
-|       |-- embedding.py
-|       |-- entity_extractor.py
-|       |-- llm_service.py
-|       |-- qdrant_service.py
-|       `-- wiki_manager.py
-|-- data/
-|   |-- raw/
-|   `-- wiki/
-|       |-- index.md
-|       `-- log.md
-`-- frontend/
-    `-- app.py
+├── AGENTS.md
+├── README.md
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── setup_qdrant.py
+├── scripts/
+│   └── smoke_test.py         # Manual end-to-end check
+├── frontend/
+│   └── app.py                # Streamlit UI
+├── backend/
+│   ├── graph/
+│   │   ├── langgraph_app.py  # Ingest + query workflows
+│   │   └── retrieval.py      # Hybrid search (RRF, dedup, context)
+│   └── services/
+│       ├── document_loader.py
+│       ├── embedding.py      # Embeddings + cache
+│       ├── entity_extractor.py
+│       ├── llm_service.py    # Groq chat API
+│       ├── qdrant_service.py
+│       ├── wiki_manager.py   # Wiki files + in-memory cache
+│       └── wiki_index.py     # BM25 search index (Whoosh)
+└── data/
+    ├── raw/
+    └── wiki/
+        ├── index.md
+        └── log.md
 ```
 
-## Architecture
+---
 
-The system has three main knowledge layers:
-
-1. **Raw sources**
-   - Uploaded documents.
-   - Treated as source material.
-   - Currently text is extracted and processed through the app.
-
-2. **Vector store**
-   - Qdrant stores embeddings for document chunks.
-   - Used as supporting retrieval infrastructure.
-
-3. **Markdown wiki**
-   - Stored in `data/wiki/`.
-   - The main persistent artifact.
-   - Contains source summaries, concept pages, entity pages, open questions, contradictions, `index.md`, and `log.md`.
-
-The operating conventions are documented in `AGENTS.md`.
-
-## Workflows
+## Technical Deep Dive
 
 ### Ingest Workflow
 
-When a file is uploaded:
-
-1. Streamlit receives the file.
-2. `document_loader.py` extracts text.
-3. `langgraph_app.py` chunks the text.
-4. `embedding.py` creates local embeddings.
-5. `qdrant_service.py` stores chunks in Qdrant.
-6. The LLM summarizes the uploaded source.
-7. The LLM extracts entities/concepts.
-8. A source summary page is created in `data/wiki/`.
-9. The LLM plans wiki maintenance updates.
-10. Concept/entity/synthesis pages are created or updated.
-11. `index.md` and `log.md` are updated.
+| Step | What happens |
+|------|----------------|
+| **chunk** | Split text into 500-character pieces |
+| **embed** | Create embeddings (OpenRouter, cached per text) |
+| **summarize** | Groq writes a source summary |
+| **entities** | Groq extracts key entities |
+| **wiki** | Create source page, update index and log |
+| **store_vectors** | Upsert chunks into Qdrant with `wiki_page`, `source_file`, `chunk_index` |
+| **plan_maintenance** | Groq returns JSON plan for concept pages |
+| **apply_maintenance** | Write/update maintained wiki pages |
 
 ### Query Workflow
 
-When a user asks a question:
+| Step | What happens |
+|------|----------------|
+| **retrieve_all** | Parallel: BM25 wiki search + Qdrant vector search (min similarity filter) |
+| **merge** | Reciprocal Rank Fusion, dedup, token budget (~2000 tokens) |
+| **generate** | Groq answers strictly from retrieved evidence |
 
-1. The app searches existing markdown wiki pages.
-2. If needed, it can use Qdrant vector search as supporting context.
-3. Retrieved context is passed to the LLM.
-4. The LLM answers only from the provided context.
+### Hybrid retrieval (internal vs UI)
 
-Questions are not ingested as source pages.
+| Layer | Behavior |
+|-------|----------|
+| **Internal retrieval** | Passage/chunk level hybrid RRF (wiki BM25 + Qdrant vectors) |
+| **UI sources** | Grouped by wiki page title + `data/wiki/{page}.md` path, or `Upload: filename` |
+| **snippet** | Collapsed under each source; passages/chunks retrieval used as LLM context |
 
-## Supported Upload Formats
+Keyword search uses a **BM25 index** (Whoosh). Vector search uses Qdrant. RRF merges both ranked lists. The top passages become the LLM context.
 
-- `.txt`
-- `.md`
-- `.pdf`
+Details: `backend/graph/retrieval.py`
 
-PDF support uses `pypdf`, so it works best with PDFs that contain selectable text. Scanned image-only PDFs need OCR support, which is not implemented yet.
+---
 
-## Local Setup
+## Setup (Local Development)
 
-Create and activate a virtual environment:
+### Prerequisites
+
+- Python 3.11+
+- Groq API key
+- OpenRouter API key (embeddings only)
+- Qdrant instance (cloud or local)
+
+### 1. Virtual environment
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-```
-
-Install dependencies:
-
-```powershell
 pip install -r requirements.txt
 ```
 
-Create a `.env` file:
+### 2. Environment file
+
+Create `.env`:
 
 ```env
 GROQ_API_KEY=your_groq_api_key
@@ -128,501 +249,137 @@ QDRANT_URL=your_qdrant_url
 QDRANT_API_KEY=your_qdrant_api_key
 ```
 
-Initialize the Qdrant collection:
+Optional:
+
+```env
+GROQ_MODEL=llama-3.3-70b-versatile
+OPENROUTER_EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+### 3. Initialize Qdrant
 
 ```powershell
 python setup_qdrant.py
 ```
 
-Run the Streamlit app:
+### 4. Run the app
 
 ```powershell
 streamlit run frontend/app.py
 ```
 
-## Docker (Local)
+Open: http://localhost:8501
 
-Build and run the app with Docker Compose:
+---
+
+## Run with Docker
 
 ```powershell
 docker compose up --build
 ```
 
-Then open:
+Open http://localhost:8501. The `data/` folder is mounted for persistence.
 
-```text
-http://localhost:8501
-```
+---
 
-The Compose setup starts:
+## Environment Variables
 
-- `app`: the Streamlit application
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `GROQ_API_KEY` | Yes | All LLM calls (ingest + Q&A) |
+| `OPENROUTER_API_KEY` | Yes | Embeddings only |
+| `QDRANT_URL` | Yes | Vector database endpoint |
+| `QDRANT_API_KEY` | Depends on host | Qdrant authentication |
+| `GROQ_MODEL` | No | Default: `llama-3.3-70b-versatile` |
+| `OPENROUTER_EMBEDDING_MODEL` | No | Default: `openai/text-embedding-3-small` |
 
-The `data/` directory is mounted into the container so generated wiki files persist on your machine.
+Never commit `.env` to git.
 
-For local Docker development, configure `.env` with your API keys and Qdrant credentials:
+---
 
-```env
-OPENROUTER_API_KEY=your_openrouter_api_key
-GROQ_API_KEY=your_groq_api_key
-QDRANT_URL=your_qdrant_cloud_url
-QDRANT_API_KEY=your_qdrant_api_key
-EMBEDDING_MODEL=your_embedding_model
-```
+## Supported File Types
 
-## AWS EC2 Deployment
+| Type | Notes |
+|------|-------|
+| `.txt` | Plain text |
+| `.md` | Markdown |
+| `.pdf` | Text-based PDFs via `pypdf` |
 
-This guide covers deploying the LLM Wiki to AWS EC2 using Docker Compose.
+Scanned/image PDFs need OCR (not implemented).
 
-### Prerequisites
-
-- AWS Account with EC2 access
-- Local SSH client (PowerShell on Windows, Terminal on macOS/Linux)
-- GitHub repository URL
-- API keys ready (OpenRouter, Groq, Qdrant)
-
-### Part 1: Launch EC2 Instance
-
-1. Go to **AWS Console** → **EC2** → **Launch Instance**
-2. Configure:
-   - **Name**: `llm-wiki`
-   - **AMI**: Ubuntu (e.g., Ubuntu 22.04 LTS)
-   - **Instance Type**: `t3.micro` or larger (free tier eligible)
-   - **Key Pair**: Create or select existing `.pem` file (download if new)
-3. **Network settings**: Enable HTTP (port 80) and Custom TCP (port 8501)
-4. Launch the instance
-5. Once running, note the **Public IPv4 Address** (e.g., `13.xx.xx.xx`)
-   - **Important**: Use Public IPv4, NOT Private IPv4 (172.31.x.x)
-
-### Part 2: Configure Security Group
-
-Update the Security Group inbound rules:
-
-| Type       | Port | Source    | Purpose          |
-| ---------- | ---- | --------- | ---------------- |
-| SSH        | 22   | Your IP   | Remote access    |
-| Custom TCP | 8501 | 0.0.0.0/0 | Streamlit access |
-
-**Troubleshooting**: If you get "Connection timed out" on SSH:
-- Verify your current public IP matches the SSH rule
-- Or temporarily set SSH source to `0.0.0.0/0` for testing only
-
-### Part 3: Connect via SSH
-
-#### Windows (PowerShell)
-
-Navigate to your `.pem` file directory:
-
-```powershell
-cd Downloads
-ssh -i llm_wiki.pem ubuntu@13.xx.xx.xx
-```
-
-#### macOS/Linux (Terminal)
-
-```bash
-ssh -i /path/to/llm_wiki.pem ubuntu@13.xx.xx.xx
-```
-
-On first connection, confirm:
-
-```text
-Are you sure you want to continue connecting? (yes/no) yes
-```
-
-### Part 4: Install Docker
-
-Update package lists:
-
-```bash
-sudo apt update
-```
-
-Install Docker:
-
-```bash
-sudo apt install docker.io -y
-```
-
-Verify installation:
-
-```bash
-docker --version
-```
-
-Start Docker service:
-
-```bash
-sudo systemctl start docker
-sudo systemctl status docker
-```
-
-Press `q` to exit status view.
-
-**Grant Docker permissions** (avoid using `sudo` for every command):
-
-```bash
-sudo usermod -aG docker ubuntu
-exit
-```
-
-Reconnect:
-
-```powershell
-ssh -i llm_wiki.pem ubuntu@13.xx.xx.xx
-```
-
-Verify Docker works without sudo:
-
-```bash
-docker ps
-```
-
-### Part 5: Install Git
-
-Check if Git is installed:
-
-```bash
-git --version
-```
-
-If not, install:
-
-```bash
-sudo apt install git -y
-```
-
-### Part 6: Clone Project
-
-Clone your repository:
-
-```bash
-git clone https://github.com/your-username/llm_wiki.git
-cd llm_wiki
-```
-
-Verify:
-
-```bash
-ls
-```
-
-### Part 7: Create `.env` File
-
-Create the environment file:
-
-```bash
-nano .env
-```
-
-Paste your configuration (replace with actual values):
-
-```env
-OPENROUTER_API_KEY=sk_or_xxxxxxxxxxxxxxxx
-GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxx
-QDRANT_URL=https://your-qdrant-url:6333
-QDRANT_API_KEY=xxxxxxxxxxxxxxxx
-EMBEDDING_MODEL=mixedbread-ai/mxbai-embed-large
-```
-
-Save the file:
-
-```text
-Ctrl + O
-Enter
-Ctrl + X
-```
-
-Verify:
-
-```bash
-cat .env
-```
-
-### Part 8: Install Docker Compose
-
-Check if installed:
-
-```bash
-docker-compose --version
-```
-
-If not available, install manually:
-
-```bash
-sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-docker-compose --version
-```
-
-### Part 9: Verify docker-compose.yml
-
-Ensure your `docker-compose.yml` uses cloud Qdrant (not local container):
-
-```yaml
-services:
-  app:
-    build: .
-    ports:
-      - "8501:8501"
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-```
-
-**Common Issue**: (The Issue i faced for the Mistake i made . you can skip it as thst mistake is not there in this)
-Old compose files may reference a local Qdrant container. Remove that service and use cloud Qdrant via `.env` instead.
-
-Update locally and push if needed:
-
-```bash
-git add docker-compose.yml
-git commit -m "Use cloud Qdrant instead of local container"
-git push origin main
-```
-
-Pull on EC2:
-
-```bash
-git pull origin main
-```
-
-### Part 10: Build and Run Application
-
-Inside the project directory:
-
-```bash
-cd ~/llm_wiki
-docker-compose up --build
-```
-
-**First time**: Watch the logs to ensure build succeeds. This may take 2-5 minutes.
-
-**On success**, stop the foreground process:
-
-```text
-Ctrl + C
-```
-
-Run in background (persistent):
-
-```bash
-docker-compose up -d
-```
-
-### Part 11: Verify Container is Running
-
-Check running containers:
-
-```bash
-docker ps
-```
-
-Expected output:
-
-```text
-CONTAINER ID    IMAGE              STATUS          PORTS
-abc123def456    llm_wiki-app-1     Up 2 minutes    0.0.0.0:8501->8501/tcp
-```
-
-### Part 12: Access the Application
-
-Open your browser and navigate to:
-
-```text
-http://13.xx.xx.xx:8501
-```
-
-Replace `13.xx.xx.xx` with your EC2 instance's Public IPv4 Address.
-
-The Streamlit UI should load.
-
-### Part 13: View Application Logs
-
-Check logs for errors:
-
-```bash
-docker logs -f llm_wiki-app-1
-```
-
-Or use container ID:
-
-```bash
-docker logs -f abc123def456
-```
-
-Useful for debugging:
-- Upload failures
-- API errors
-- Connection issues to Qdrant
-
-Press `Ctrl + C` to exit logs.
-
-### Part 14: Access Files on EC2
-
-List project files:
-
-```bash
-cd ~/llm_wiki
-ls
-```
-
-List all files (including hidden):
-
-```bash
-ls -la
-```
-
-Recursive listing:
-
-```bash
-ls -R
-```
-
-### Part 15: Access Container Files
-
-Enter running container:
-
-```bash
-docker exec -it llm_wiki-app-1 bash
-```
-
-Inside container, explore:
-
-```bash
-ls /app
-ls /app/data
-ls /app/data/wiki
-```
-
-Exit container:
-
-```bash
-exit
-```
-
-### Part 16: Manage Application
-
-Stop the application:
-
-```bash
-docker stop llm_wiki-app-1
-```
-
-Start it again:
-
-```bash
-docker start llm_wiki-app-1
-```
-
-Restart:
-
-```bash
-docker restart llm_wiki-app-1
-```
-
-Stop and remove containers:
-
-```bash
-docker-compose down
-```
-
-### Part 17: Update Application
-
-After code changes, pull and rebuild:
-
-```bash
-cd ~/llm_wiki
-git add .
-git commit -m "Your commit message"
-git push origin main
-```
-
-On EC2:
-
-```bash
-cd ~/llm_wiki
-git pull origin main
-docker-compose down
-docker-compose up -d --build
-```
-
-### Part 18: Important Notes
-
-1. **Use Public IPv4 Address**: Do not use Private IPv4 (172.31.x.x)
-
-2. **SSH Timeout**: Usually indicates Security Group misconfiguration. Update SSH inbound rule with your current public IP.
-
-3. **.env Security**: Never commit `.env` to GitHub. Configure it locally on the instance.
-
-4. **Container Persistence**: Docker containers keep running even if:
-   - SSH session closes
-   - PowerShell/Terminal window closes
-   - Local machine shuts down
-   - EC2 instance is stopped and restarted (with `restart: unless-stopped` policy)
-
-5. **Check Logs**: Always use `docker logs -f llm_wiki-app-1` when diagnosing issues.
-
-6. **Free Tier Limitations**: EC2 free tier instances (~1 GB RAM) may be slow for LLM/RAG workloads. Consider upgrading to `t3.small` or `t4g.small` for better performance.
-
-7. **Data Persistence**: Wiki files in `./data/wiki/` persist on EC2 filesystem. Back up regularly or push to GitHub.
-
-8. **Costs**: Monitor your AWS EC2 usage. Free tier covers 750 hours/month of `t2.micro`. Larger instances or data transfer incur charges.
+---
 
 ## LLM Providers
 
-LLM calls are handled in `backend/services/llm_service.py`.
+| Task | Provider | Model |
+|------|----------|-------|
+| Summarize, entities, maintenance, Q&A | **Groq** | `llama-3.3-70b-versatile` |
+| Embeddings | **OpenRouter** | `text-embedding-3-small` |
 
-Currently configured clients:
+Groq handles all text generation because it is fast and reliable for multi-step pipelines. OpenRouter is kept only for embeddings (Groq does not offer an embedding API). Embedding results are cached in memory for repeated questions.
 
-- Groq, using OpenAI-compatible API
-- OpenRouter, using OpenAI-compatible API
+All API clients use a 120-second timeout.
 
-The default generation path uses Groq:
+---
 
-```python
-call_openrouter(prompt, model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
-```
+## Managing Uploads and Wiki Pages
 
-## Token Limit Note
+### Upload queue (before ingest)
 
-Large files can exceed the LLM provider's token or rate limits if the entire extracted text is sent in one request.
+- Files you select are added to a **queue** in the sidebar
+- Each file has a **Remove** button — use this if you picked the wrong file
+- **Clear queue** removes all pending files
+- **Ingest Documents** only processes the queue
 
-This project currently keeps the workflow simple, but production usage should add:
+### Delete wiki pages (after ingest)
 
-- chunked summarization
-- prompt/context budgeting
-- retry/backoff for rate limits
-- background ingestion queue for large documents
+- Sidebar → **Manage Wiki Pages**
+- Select a page → **Delete selected page**
+- Removes the `.md` file and its entry from `index.md`
+- Logs a `DELETE` event in `log.md`
+
+Note: Deleting a wiki page removes its markdown file, index entry, BM25 index entries (on rebuild), and Qdrant vectors tagged with that `wiki_page`.
+
+---
 
 ## Current Limitations
 
-- Large PDFs may hit Groq token-per-minute limits.
-- Scanned PDFs are not supported.
-- Wiki maintenance quality depends on the LLM response.
-- Contradiction detection is basic and prompt-driven.
-- There is no dedicated lint/health-check workflow yet.
-- No authentication or multi-user support.
-- `backend/main.py` is currently empty; the app is Streamlit-first.
+- Large documents may hit Groq rate/token limits
+- No OCR for scanned PDFs
+- Ingest runs synchronously in the UI (no background queue)
+- No authentication or multi-user support
+- Vector orphans may remain for legacy chunks ingested before metadata was added (re-ingest to fix)
 
-## Scope for Further Improvements
+---
 
-- Adding a "Lint Wiki" workflow.
-- Adding OCR for scanned PDFs.
-- Adding chunked summarization for large files.
-- Adding a "Save this answer to wiki" button.
-- Improve entity/concept page linking.
-- Adding source metadata and YAML frontmatter.
-- Adding better search over markdown pages.
-- Adding tests around wiki updates and duplicate page handling.
-- Multi-user authentication and access control.
-- Automated wiki health checks and validation.
+## Deployment Checklist
 
-## Git Commit Do's and Don'ts
+- [ ] Store secrets in a vault, not in the Docker image
+- [ ] Run Qdrant as a managed or dedicated service
+- [ ] Persist `data/wiki/` to durable storage
+- [ ] Add background worker for large-file ingest
+- [ ] Add authentication in front of Streamlit
+- [ ] Pin Qdrant client version to match server
+- [ ] Add structured logging and health checks
 
-- Do not commit `.env`.
-- Do not commit `venv/`.
-- Consider committing `data/wiki/` if you want your generated wiki in version control.
-- Consider committing only sample files under `data/` if the wiki contains private information.
+---
+
+## Smoke Test
+
+After setup, verify ingest and Q&A:
+
+```powershell
+python scripts/smoke_test.py
+```
+
+Expected: ingest completes in ~15–30s, first query in ~3–5s, repeated query faster due to embedding cache.
+
+---
+
+## Summary
+
+**Theory:** Build compounding knowledge as markdown, not throwaway chat context.
+
+**Practice:** Upload → review queue → ingest writes wiki + vectors → ask questions → parallel hybrid retrieval → Groq answers from evidence only.
+
+The system gets smarter as you feed it documents, while keeping human-readable files you fully control.

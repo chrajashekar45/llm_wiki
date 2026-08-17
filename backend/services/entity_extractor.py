@@ -1,17 +1,13 @@
-from backend.services.llm_service import call_groq,call_openrouter
+from backend.services.llm_service import call_groq
+
+ENTITY_TEXT_LIMIT = 8000
 
 
 def extract_entities(text):
-    prompt = f"""
-Extract key entities (topics, concepts, names) from the text.
-Return as a comma-separated list.
-
-Text:
-{text}
-"""
-
-    response = call_openrouter(prompt)
-
-    entities = [e.strip() for e in response.split(",") if e.strip()]
-
-    return entities
+    prompt = (
+        "Extract key entities (topics, concepts, names) from the text.\n"
+        "Return as a comma-separated list.\n\n"
+        f"Text:\n{text[:ENTITY_TEXT_LIMIT]}"
+    )
+    response = call_groq(prompt)
+    return [item.strip() for item in response.split(",") if item.strip()]
