@@ -573,12 +573,11 @@ See `AGENTS.md` for LLM-facing conventions:
 
 ##  Deployment Checklist
 
-Before deploying to production, ensure:
+Before going from prototype deploying to production, ensure:
 
-- [ ] **Secrets management** — store API keys in a vault (AWS Secrets Manager, HashiCorp Vault, etc.), not in Docker image
+- [ ] **Secrets management** — store API keys in a vault (AWS Secrets Manager, etc.), not in Docker image
 - [ ] **Qdrant backend** — run as managed service (Qdrant Cloud) or dedicated container, not in-process
 - [ ] **Data persistence** — mount `data/wiki/` to durable storage (S3, persistent volume, etc.)
-- [ ] **Background workers** — add job queue for large-file ingest (Celery, RQ, etc.)
 - [ ] **Authentication** — add OAuth2 or reverse proxy (nginx with auth) in front of Streamlit
 - [ ] **Rate limiting** — add per-user or per-IP rate limits at API gateway
 - [ ] **Logging** — structured logging (JSON) to centralized service (ELK, CloudWatch, etc.)
