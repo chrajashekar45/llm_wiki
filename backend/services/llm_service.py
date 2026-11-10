@@ -5,7 +5,7 @@ from openai import OpenAI
 
 load_dotenv()
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 groq_client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
