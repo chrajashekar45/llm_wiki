@@ -200,7 +200,7 @@ Results grouped by wiki page or upload file
 
 | Optimization | Impact | How |
 |--------------|--------|-----|
-| **Groq for all LLM** | Q&A: 60s+ → ~4s | Uses `llama-3.3-70b-versatile` (fast inference) |
+| **Groq for all LLM** | Q&A: 60s+ → ~4s | Uses `openai/gpt-oss-120b` (fast inference) |
 | **Parallel retrieval** | Retrieval latency cut ~50% | Wiki search + vector search run simultaneously |
 | **Embedding cache** | Warm queries: ~1s vs ~4s cold | Cached embeddings skip OpenRouter API |
 | **Wiki page cache** | Faster keyword search as wiki grows | In-memory markdown pages, refreshed on edits |
@@ -258,7 +258,7 @@ QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=your_qdrant_key_or_leave_empty_for_local
 
 # Optional (defaults shown)
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 OPENROUTER_EMBEDDING_MODEL=openai/text-embedding-3-small
 ```
 
@@ -365,7 +365,7 @@ To add more formats, extend `backend/services/document_loader.py`.
 
 **Used for:** All text generation (ingest, Q&A)
 
-**Model:** `llama-3.3-70b-versatile`
+**Model:** `openai/gpt-oss-120b`
 
 **Why Groq?**
 - Extremely fast inference (sub-second for most calls)
